@@ -1,0 +1,114 @@
+#!/usr/bin/python3
+
+import sys
+
+"""
+Locates and replaces the first occurrence of a string in the stack of a process
+"""
+
+USAGE = """Usage: {} <pid> <search> <replace>
+
+ARGUMENTS
+=========
+pid:
+    The pid of the target process
+search:
+    the ascii string you are looking to overwrite
+replace:
+    the string you want to reach the search string with"""
+
+import sys
+
+def print_usage_and_exit():
+    print(USAGE.format(sys.argv[0]), file=sys.stderr)
+    sys.exit(1);
+
+# check usage
+if len(sys.argv) != 4:
+    print_usage_and_exit()
+
+pid, search, replace = sys.argv[1:]
+pid = int(pid)
+if pid <= 0:
+    print("pid invalid", file=sys.stderr)
+    exit(2)
+if not search:
+    print("empty search string", file=sys.stderr)
+if not replace:
+    print("empty replace string", file=sys.stderr)
+
+maps_filename = f"/proc/{pid}/maps"
+print(f"[*] maps: {maps_filename}")
+mem_filename =  f"/proc/{pid}/mem"
+print(f"[*] mem: {mem_filename}")
+
+try:
+    maps_file = open(maps_filename, 'r')
+except IOError as e:
+    print(f"[ERROR] Cannot open {maps_filename}: ", file=sys.stderr)
+    print(f"    I/O error({e.errno}): {e.strerror}", file=sys.stderr)
+    sys.exit(1)
+for line in maps_file:
+    sline = line.split(' ')
+    # check if we found the heap
+    if sline[-1][:-1] != "[stack]":
+        continue
+    print("[*] Found [heap]:")
+    addr, perm, offset, device, inode = sline[:5]
+    pathname = sline[-1][:-1]
+    print(f"\tpathname = {pathname}")
+    print(f"\taddresses = {addr}")
+    print(f"\tpermissions = {perm}")
+    print(f"\toffset = {offset}")
+    print(f"\tinode = {inode}")
+
+    # Check if there is read and write permisson
+    if perm[:2] != "rw":
+        print(f"[*] {pathname} does not have read/write permission", file=sys.stderr)
+        maps_file.close()
+        exit(0)
+
+    # get start and end of the heap in the virtual memory
+    addr = addr.split('-')
+    if len(addr) != 2: # never trust anyone even your OS :)
+        print("[*] Wrong addr format", file=sys.stderr)
+        maps_file.close()
+        exit(1)
+    addr_start = int(addr[0], 16)
+    addr_end = int(addr[1], 16)
+    print("Addr start [0x{:x}] | end [0x{:x}]".format(addr_start, addr_end))
+
+
+    # open and read mem
+    try:
+        mem_file = open(mem_filename, 'rb+')
+    except IOError as e:
+        print(f"[ERROR] Cannot open {mem_filename}: ", file=sys.stderr)
+        print(f"    I/O error({e.errno}): {e.strerror}", file=sys.stderr)
+        maps_file.close()
+        exit(1)
+
+    # read heap
+    mem_file.seek(addr_start)
+    heap = mem_file.read(addr_end - addr_start)
+
+    # find string
+    try:
+        i = heap.index(bytes(search, "ASCII"))
+    except Exception:
+        print(f"Can't find '{search}'")
+        maps_file.close()
+        mem_file.close()
+        exit(0)
+    print("[*] Found '{}' at offset 0x{:x} from 0x{:x}".format(
+        search, i, addr_start))
+
+    # write the new string
+    print("[*] Writing {} at 0x{:x}".format(replace, addr_start + i))
+    mem_file.seek(addr_start + i)
+    mem_file.write(bytes(replace, "ASCII"))
+    
+
+    # close files
+    maps_file.close()
+    mem_file.close()
